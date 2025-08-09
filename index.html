@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Simple WebRTC Camera Stream</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align:center; margin:20px; }
+    video { width: 90vw; max-width: 480px; margin: 10px auto; background:#000; }
+    button { font-size: 1.2em; padding: 10px 20px; margin: 10px; }
+  </style>
+</head>
+<body>
+  <h2>WebRTC Camera Stream Demo</h2>
+  <button id="startButton">Start Streaming</button>
+  <video id="localVideo" autoplay muted playsinline></video>
+  <video id="remoteVideo" autoplay playsinline></video>
+
+  <script>
+    const startButton = document.getElementById('startButton');
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+
+    let localStream;
+    let pc;
+
+    // Use free public signaling server at wss://signaling.simplewebrtc.com
+    // (If you want your own signaling server, you can replace this URL)
+    const signalingServerUrl = 'wss://signaling.simplewebrtc.com';
+    let ws;
+
+    function send(message) {
+      ws.send(JSON.stringify(message));
+    }
+
+    startButton.onclick = async () => {
+      startButton.disabled = true;
+
+      // Connect to signaling server
+      ws = new WebSocket(signalingServerUrl);
+      ws.onmessage = async (msg) => {
+        let data = JSON.parse(msg.data);
+
+        if (data.offer) {
+          await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          send({ answer });
+        } else if (data.answer) {
+          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        } else if (data.ice) {
+          try {
+            await pc.addIceCandidate(data.ice);
+          } catch (e) {
+            console.error('Error adding received ice candidate', e);
+          }
+        }
+      };
+
+      ws.onopen = async () => {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        localVideo.srcObject = localStream;
+
+        pc = new RTCPeerConnection({
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
+
+        // Send ICE candidates to signaling server
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            send({ ice: event.candidate });
+          }
+        };
+
+        pc.ontrack = (event) => {
+          remoteVideo.srcObject = event.streams[0];
+        };
+
+        // Add local tracks to peer connection
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+        // Create offer and send it
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        send({ offer });
+      };
+    };
+  </script>
+</body>
+</html>
